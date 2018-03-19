@@ -1,24 +1,70 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 #include <SoftwareSerial.h>
+#include "config.h"
 
-// Update these with values suitable for your network.
+#ifndef MQTT_Sensor_Config_H
+#error Debe de renombrar el archivo "config.example.h" a "config.h" antes de continuar.
+#endif
 
-const char* ssid = "";
-const char* password = "";
-const char* mqtt_server = "";
+// Buffer para mensajes de salida
 char message[64];
 
-SoftwareSerial particleSensor(12, 14); // RX, TX
+// En el ESP8266 el puerto serie. Asegurese de conectar los pines 12 y 14
+SoftwareSerial particleSensor(12, 14);
 
-float pm25; //2.5um particles detected in ug/m3
-float pm10; //10um particles detected in ug/m3
+// Variables para almacenar las mediciones de pm
+float pm25;
+float pm10;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
 long lastMsg = 0;
-char msg[50];
 int value = 0;
+
+/*
+ * setup_wifi(): Intenta conectar a la WiFi especificada
+ * en la configuraci贸n. Este intentar谩 conectar de forma continua.
+ * Si toma demasiado tiempo en conectar revise las credenciales
+ * y la orientaci贸n del receptor respecto al router.
+ */
+void setup_wifi() {
+  delay(10);
+  
+  Serial.println();
+  Serial.print("Conectando a ");
+  Serial.println(wifi_ssid);
+
+  WiFi.begin(wifi_ssid, wifi_password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.println("WiFi conectado");
+  Serial.println("Direcci贸n IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+
+/*
+ * callback(): Esta funci贸n es llamada cada vez que se recibe un
+ * nuevo mensaje en el tema correspondiente al que el terminal esta
+ * suscrito. Pueden enviarse mensajes de control al dispositivo.
+ * Este ejemplo no se suscribe a ning煤n tema por defecto. Revise
+ * el c贸digo en reconnect() para encontrar un ejemplo de como
+ * suscribirse a un tema en particular.
+ */
+void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Mensaje recibido [");
+  Serial.print(topic);
+  Serial.print("] ");
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)payload[i]);
+  }
+}
 
 void setup() {
   pinMode(BUILTIN_LED, OUTPUT);     // Initialize the BUILTIN_LED pin as an output
@@ -28,53 +74,14 @@ void setup() {
   client.setCallback(callback);
 }
 
-void setup_wifi() {
-
-  delay(10);
-  // We start by connecting to a WiFi network
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-
-  WiFi.begin(ssid, password);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
-}
-
-void callback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  for (int i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
-  }
-  Serial.println();
-
-  // Switch on the LED if an 1 was received as first character
-  if ((char)payload[0] == '1') {
-    digitalWrite(BUILTIN_LED, LOW);   // Turn the LED on (Note that LOW is the voltage level
-    // but actually the LED is on; this is because
-    // it is acive low on the ESP-01)
-  } else {
-    digitalWrite(BUILTIN_LED, HIGH);  // Turn the LED off by making the voltage HIGH
-  }
-
-}
-
 void reconnect() {
-  // Repetir hasta lograr una conexi髇
+  // Repetir hasta lograr una conexi贸n
   while (!client.connected()) {
-    Serial.print("Intentando conexi髇 a MQTT");
-    if (client.connect("SensorCalidadAire", "", "")) {
+    Serial.print("Intentando conexi贸n a MQTT");
+    if (client.connect(mqtt_client_id, mqtt_user, mqtt_passwd)) {
       Serial.println("conectado");
+      // Si desea suscribirse a un tema descomente las siguientes l铆neas
+      //client.subscribe(mqtt_topic_sub);
     } else {
       Serial.print("error, rc=");
       Serial.print(client.state());
@@ -84,8 +91,10 @@ void reconnect() {
   }
 }
 
-// Actualiza las mediciones de nivel de part韈ulas
-// para 2.5 y 10 partes por mill髇.
+/*
+ * Actualiza las mediciones de partes por millon.
+ * Nota: Esta implementaci贸n es bloqueante. Implementar versi贸n no bloqueante.
+ */
 boolean dataAvailable(void)
 {
   //Spin until we hear meassage header byte
@@ -96,10 +105,10 @@ boolean dataAvailable(void)
     while (!particleSensor.available())
     {
       delay(1);
-      if (millis() - startTime > 1500) return (false); //Timeout error
+      if (millis() - startTime > 1500) return (false); //Error de timeout
     }
 
-    if (particleSensor.read() == 0xAA) break; //We have the message header
+    if (particleSensor.read() == 0xAA) break; //Encabezado del mensaje obtenido
   }
 
   //Read the next 9 bytes
@@ -110,26 +119,30 @@ boolean dataAvailable(void)
     while (!particleSensor.available())
     {
       delay(1);
-      if (millis() - startTime > 1500) return (false); //Timeout error
+      if (millis() - startTime > 1500) return (false); // tiempo de espera agotado
     }
 
     sensorValue[spot] = particleSensor.read();
   }
 
-  //Check CRC
+  // C谩lculo de CRC
   byte crc = 0;
-  for (byte x = 2 ; x < 8 ; x++) //DATA1+DATA2+...+DATA6
+  for (byte x = 2 ; x < 8 ; x++)
     crc += sensorValue[x];
   if (crc != sensorValue[8])
-    return (false); //CRC error
+    return (false); // CRC inv谩lido
 
-  //Update the global variables
+  // Actualiza las variables locales con los valores de medici贸n
   pm25 = ((float)sensorValue[3] * 256 + sensorValue[2]) / 10;
   pm10 = ((float)sensorValue[5] * 256 + sensorValue[4]) / 10;
 
-  return (true); //We've got a good reading!
+  return (true); // Si llegamos aqu铆 tenemos una lectura v谩lida
 }
 
+/*
+ * Mantiene la conexi贸n al broker MQTT y env铆a mensajes
+ * con el valor del sensor cada vez que hay datos nuevos
+ */
 void loop() {
 
   if (!client.connected()) {
@@ -137,11 +150,11 @@ void loop() {
   }
   client.loop();
 
-  long now = millis();
+  // Env铆a una publicaci贸n cada vez que se recibe un mensaje nuevo 
   if (dataAvailable()) {
     sprintf(message, "{'pm25':%f,'pm10':%f}", pm25, pm10);
-    Serial.print("Publish message: ");
+    Serial.print("Publicando mensaje: ");
     Serial.println(message);
-    client.publish("sensors", message);
+    client.publish(mqtt_topic_pub, message);
   }
 }
