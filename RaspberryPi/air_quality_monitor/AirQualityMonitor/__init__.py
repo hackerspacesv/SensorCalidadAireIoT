@@ -19,10 +19,16 @@ class Monitor:
     pm10 = 0
     new_data = False
 
-    ser = serial.Serial('/dev/ttyAMA0',9600)
+    def init_serial(self):
+        # We start manually
+        self.ser = serial.Serial('/dev/serial0',9600, timeout=1.0,rtscts=0)
+        self.ser.write('1')
+        # Reset Input Buffer
+        while self.ser.inWaiting():
+            self.ser.read(1)
 
     def update(self):
-        print("Updating...")
+        #print("Updating...")
         #self.ser.write(b'\xAA\xB4\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xA1\x60\x05\xAB')
         #self.ser.write(b'\xAA\xB4\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xFF\xFF\x00\xAB')
         # Note: Set to query data mode.

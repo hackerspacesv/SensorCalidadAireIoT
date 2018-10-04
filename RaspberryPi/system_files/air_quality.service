@@ -1,0 +1,8 @@
+[Unit]
+Description=Air Quality Sensor Service
+BindsTo=dev-ttyAMA0.device
+
+[Service]
+Type=simple
+ExecStartPre=/home/pi/air_quality_monitor/cleanup.py
+ExecStart=/home/pi/air_quality_monitor/run.py

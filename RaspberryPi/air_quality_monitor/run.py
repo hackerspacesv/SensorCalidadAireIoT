@@ -1,4 +1,5 @@
 #!/usr/bin/python
+import os
 import time
 import signal
 import sys
@@ -12,11 +13,19 @@ import config as Config
 
 # Set from config.py
 log = Config.log
+lockfile = Config.lockfile
 database = Config.database
 period = Config.period
 
 # Program start
-run = True
+run = True if not os.path.isfile(lockfile) else False
+
+if run:
+    f = open(lockfile, 'a')
+    f.close()
+else:
+    print("Lockfile found.. Stopping process.")
+    exit(0)
 
 # MQTT connection procedure
 def on_connect(client, userdata, flags, rc):
@@ -54,18 +63,21 @@ def signal_handler(signal, frame):
 # Set signal handlers
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGUSR1, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 # Application entry point
 if __name__ == "__main__":
     init_logging(log)
-    logging.info("Starting up...")
-
-    logging.info("Setting up database")
+    logging.info("Setting up database...")
     conn = init_db(database)
     c = conn.cursor();
 
+    # Trying to start serial client
+    logging.info("Starting serial connection...")
     monitor = Monitor()
+    monitor.init_serial()
 
+    logging.info("Starting MQTT client...")
     # Set up client configuration
     client = mqtt.Client()
     client.username_pw_set(Config.mqtt_user, password=Config.mqtt_pass)
@@ -75,12 +87,13 @@ if __name__ == "__main__":
     # messages.
     client.on_connect = on_connect
 
-    try_mqtt_reconnect = False
+    try_mqtt_reconnect = True
 
     while run:
         monitor.update()
 
         if try_mqtt_reconnect:
+            logging.info("Trying to connect MQTT")
             try_mqtt_connect(client)
             try_mqtt_reconnect = False
 
@@ -110,7 +123,10 @@ if __name__ == "__main__":
         # Wait before try again
         time.sleep(period)
 
+    logging.info("Cleaning up to shutdown")
     client.loop_stop()
     monitor.cleanup()
+    if os.path.isfile(lockfile):
+        os.remove(lockfile)
     sys.exit(0)
 
